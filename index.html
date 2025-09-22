@@ -5,29 +5,32 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Drippy Magic Cube Challenge</title>
   <meta name="color-scheme" content="dark" />
-  <!-- Tailwind for styles (ok to omit; page still shows content without it) -->
+  <!-- Tailwind for styling -->
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
     html, body { height: 100%; background: #0a0f14; }
     body { margin: 0; color: #fff; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji"; }
-    /* helpers */
+
+    /* Helpers/animations */
     @keyframes floaty {0%{transform:translateY(0)}50%{transform:translateY(-6px)}100%{transform:translateY(0)}}
     @keyframes wobble {0%,100%{transform:rotate(0)}25%{transform:rotate(-3deg)}75%{transform:rotate(3deg)}}
     @keyframes marquee {0%{transform:translateX(0)}100%{transform:translateX(-50%)}}
     .animate-floaty{animation:floaty 4s ease-in-out infinite}
     .animate-wobble:hover{animation:wobble .6s ease-in-out}
     .animate-marquee{animation:marquee 16s linear infinite}
-    @keyframes driftNode { 0% { transform: translate3d(0,0,0) rotate(0deg) }
-      50% { transform: translate3d(var(--dx), var(--dy), 0) rotate(5deg) }
-      100% { transform: translate3d(0,0,0) rotate(0deg) } }
+    @keyframes driftNode {
+      0%   { transform: translate3d(0,0,0) rotate(0deg); opacity:.9 }
+      50%  { transform: translate3d(var(--dx), var(--dy), 0) rotate(3deg); opacity:.95 }
+      100% { transform: translate3d(0,0,0) rotate(0deg); opacity:.9 }
+    }
   </style>
 </head>
 <body>
-  <!-- BACKGROUND (fixed behind everything) -->
+  <!-- BACKGROUND (fixed, z-index 0) -->
   <div id="bg" aria-hidden="true"
        style="position:fixed; inset:0; z-index:0; pointer-events:none; overflow:hidden"></div>
 
-  <!-- CONTENT (explicitly above background) -->
+  <!-- CONTENT (z-index 1) -->
   <div style="position:relative; z-index:1; min-height:100vh; background: linear-gradient(180deg,#020409,#0a0f14 40%,#0b0e12)">
     <header class="relative">
       <div class="mx-auto max-w-6xl px-4 pt-10 pb-6">
@@ -35,7 +38,7 @@
           <img src="https://cdn.shopify.com/s/files/1/0630/6889/7494/files/eyes-3inch-red.png?v=1742844664"
                alt="Drippy Logo" class="w-12 h-12 object-contain animate-floaty animate-wobble" />
           <h1 class="text-2xl md:text-3xl font-extrabold tracking-tight bg-gradient-to-r from-lime-300 via-white to-pink-300 bg-clip-text text-transparent">
-            Drippy Magic Cube Leaderboard
+            Drippy Rubix Cube Leaderboard
           </h1>
         </div>
         <div class="mt-4 flex flex-wrap items-center gap-2">
@@ -141,7 +144,7 @@
     function parseTimeToMs(str) {
       if (!str) return Number.POSITIVE_INFINITY;
       const s = String(str).trim();
-      if (/^\d+(\.\d+)?$/.test(s)) return Math.round(parseFloat(s) * 1000);
+      if (/^\\d+(\\.\\d+)?$/.test(s)) return Math.round(parseFloat(s) * 1000);
       const parts = s.split(":").map(Number);
       if (parts.some((p) => isNaN(p))) return Number.POSITIVE_INFINITY;
       if (parts.length === 2) {
@@ -161,7 +164,7 @@
       const msec = ms % 1000;
       const mm = Math.floor(totalSec / 60);
       const ss = totalSec % 60;
-      return `${pad(mm)}:${pad(ss)}.${pad(msec, 3)}`;
+      return \`\${pad(mm)}:\${pad(ss)}.\${pad(msec, 3)}\`;
     }
     function hostOf(url) {
       try { return new URL(url).hostname.replace("www.",""); } catch { return ""; }
@@ -169,111 +172,256 @@
 
     // ---------- Data ----------
     const STORAGE_KEY = "drippy_rubix_entries";
-    const seed = [
+    const seedEntries = [
       { name: "Nova",      timeInput: "00:43.127", link: "https://youtu.be/dQw4w9WgXcQ" },
       { name: "Ry L.",     timeInput: "41.8",      link: "https://www.instagram.com/" },
       { name: "PixelPete", timeInput: "01:02.45",  link: "https://www.tiktok.com/" },
     ];
     function loadEntries() {
       try { const raw = localStorage.getItem(STORAGE_KEY); if (raw) return JSON.parse(raw); } catch {}
-      return seed;
+      return seedEntries;
     }
     function saveEntries(list) {
       try { localStorage.setItem(STORAGE_KEY, JSON.stringify(list)); } catch {}
     }
 
-    // ---------- Background (SVG nodes + lines) ----------
-    function initNodeNetBG() {
+    // ---------- Fractal cubes + clustered links background (SVG) ----------
+    function initFractalCubeBG() {
       const bg = document.getElementById("bg");
+      if (!bg) return;
       bg.innerHTML = "";
-      const w = window.innerWidth || 1280, h = window.innerHeight || 720;
 
-      let seed = (w ^ h ^ 1337) >>> 0;
-      function rnd() {
-        seed += 0x6D2B79F5;
-        let t = seed;
-        t = Math.imul(t ^ (t >>> 15), t | 1);
-        t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+      const W = Math.max(640, window.innerWidth || 1280);
+      const H = Math.max(480, window.innerHeight || 720);
+
+      // Tunables
+      const SCALE        = 0.0032; // larger = denser clusters
+      const OCTAVES      = 4;      // noise octaves
+      const THRESHOLD    = 0.58;   // spawn if fbm(x,y) > THRESHOLD
+      const MAX_NODES    = Math.max(200, Math.min(360, Math.floor((W * H) / 14000)));
+      const LINE_RADIUS  = 120;    // connect within cluster if distance < LINE_RADIUS
+      const CLUSTERS     = 6;      // quantize noise into this many cluster bands
+      const CENTR_LINKS  = 3;      // connect each cluster centroid to N nearest centroids
+      const CELL_STEP    = 36;     // sampling cell size
+
+      const svgNS = "http://www.w3.org/2000/svg";
+      const smooth = (t) => t * t * (3 - 2 * t);
+      const lerp = (a, b, t) => a + (b - a) * t;
+
+      // deterministic hash → [0,1)
+      function hashInt(x, y, seed) {
+        let h = (x * 374761393) ^ (y * 668265263) ^ seed;
+        h = (h ^ (h >>> 13)) >>> 0;
+        h = (h * 1274126177) >>> 0;
+        return (h & 0xffffffff) / 0x100000000;
+      }
+      // 2D value noise
+      function valueNoise(x, y, seed) {
+        const x0 = Math.floor(x), y0 = Math.floor(y);
+        const x1 = x0 + 1,        y1 = y0 + 1;
+        const tx = smooth(x - x0);
+        const ty = smooth(y - y0);
+        const v00 = hashInt(x0, y0, seed);
+        const v10 = hashInt(x1, y0, seed);
+        const v01 = hashInt(x0, y1, seed);
+        const v11 = hashInt(x1, y1, seed);
+        const ix0 = lerp(v00, v10, tx);
+        const ix1 = lerp(v01, v11, tx);
+        return lerp(ix0, ix1, ty);
+      }
+      // fBm
+      function fbm(x, y, seed) {
+        let f = 1, amp = 0.5, sum = 0, norm = 0;
+        for (let o = 0; o < OCTAVES; o++) {
+          sum  += valueNoise(x * f, y * f, seed + o * 101) * amp;
+          norm += amp;
+          f *= 2; amp *= 0.5;
+        }
+        return sum / norm; // ~[0,1]
+      }
+      // gradient for motion direction
+      function grad(x, y, seed) {
+        const eps = 1.5;
+        const a = fbm(x + eps, y, seed);
+        const b = fbm(x - eps, y, seed);
+        const c = fbm(x, y + eps, seed);
+        const d = fbm(x, y - eps, seed);
+        return { gx: (a - b), gy: (c - d) };
       }
 
-      const count = Math.max(70, Math.min(140, Math.floor((w * h) / 28000)));
+      // Build nodes by sampling fractal field
+      const seed = (W ^ H ^ 1337) >>> 0;
       const nodes = [];
-      for (let i=0;i<count;i++) {
-        const s = 3 + Math.floor(rnd() * 14);
-        const x = Math.floor(rnd() * w);
-        const y = Math.floor(rnd() * h);
-        const delay = rnd() * 1.8;
-        const dur = 6 + rnd() * 10;
-        const dir = rnd() * 360;
-        const dx = Math.cos(dir * Math.PI/180) * (6 + rnd()*16);
-        const dy = Math.sin(dir * Math.PI/180) * (6 + rnd()*16);
-        nodes.push({x,y,s,delay,dur,dx,dy});
+      for (let y = 0; y < H; y += CELL_STEP) {
+        for (let x = 0; x < W; x += CELL_STEP) {
+          const jx = x + Math.random() * CELL_STEP;
+          const jy = y + Math.random() * CELL_STEP;
+          const nx = jx * SCALE, ny = jy * SCALE;
+          const d  = fbm(nx, ny, seed);
+          if (d > THRESHOLD) {
+            const sz = 3 + Math.floor((d - THRESHOLD) * 48); // 3..~27
+            const { gx, gy } = grad(nx, ny, seed);
+            const mag = 6 + (d - THRESHOLD) * 28;
+            const dx = gx * mag, dy = gy * mag;
+            const delay = Math.random() * 1.6;
+            const dur   = 7 + Math.random() * 10;
+            const cid = Math.min(CLUSTERS - 1, Math.floor(d * CLUSTERS));
+            nodes.push({ x: jx, y: jy, s: sz, cid, dx, dy, delay, dur, d });
+          }
+        }
       }
+      // Cap nodes (keep densest first)
+      nodes.sort((a, b) => b.d - a.d);
+      nodes.length = Math.min(nodes.length, MAX_NODES);
 
+      // Group by cluster
+      const clusters = Array.from({ length: CLUSTERS }, () => []);
+      nodes.forEach(n => clusters[n.cid].push(n));
+
+      // Intra-cluster edges
       const edges = [];
-      const threshold = 150;
-      for (let i=0;i<nodes.length;i++) for (let j=i+1;j<nodes.length;j++) {
-        const a=nodes[i], b=nodes[j];
-        const dx=a.x-b.x, dy=a.y-b.y;
-        const d=Math.hypot(dx,dy);
-        if (d<=threshold) edges.push({x1:a.x,y1:a.y,x2:b.x,y2:b.y,d});
+      for (const group of clusters) {
+        for (let i = 0; i < group.length; i++) {
+          for (let j = i + 1; j < group.length; j++) {
+            const a = group[i], b = group[j];
+            const dx = a.x - b.x, dy = a.y - b.y;
+            const dist = Math.hypot(dx, dy);
+            if (dist <= LINE_RADIUS) edges.push({ x1: a.x, y1: a.y, x2: b.x, y2: b.y, d: dist });
+          }
+        }
       }
 
-      const svg = document.createElementNS("http://www.w3.org/2000/svg","svg");
-      svg.setAttribute("viewBox", `0 0 ${w} ${h}`);
-      svg.setAttribute("preserveAspectRatio","none");
-      svg.setAttribute("class","w-full h-full");
-      svg.style.opacity = 0.38;
+      // Cluster centroids + inter-cluster soft links
+      const centroids = clusters
+        .filter(g => g.length)
+        .map((g, idx) => {
+          const c = g.reduce((acc, p) => (acc.x += p.x, acc.y += p.y, acc), { x: 0, y: 0 });
+          return { x: c.x / g.length, y: c.y / g.length, cid: idx, n: g.length };
+        });
 
-      const defs = document.createElementNS(svg.namespaceURI,"defs");
-      const grad1 = document.createElementNS(svg.namespaceURI,"linearGradient");
-      grad1.id = "nodeGrad";
-      grad1.setAttribute("x1","0"); grad1.setAttribute("y1","0"); grad1.setAttribute("x2","1"); grad1.setAttribute("y2","1");
-      const n1 = document.createElementNS(svg.namespaceURI,"stop"); n1.setAttribute("offset","0%"); n1.setAttribute("stop-color","#a3e635");
-      const n2 = document.createElementNS(svg.namespaceURI,"stop"); n2.setAttribute("offset","100%"); n2.setAttribute("stop-color","#ec4899");
-      grad1.append(n1,n2);
+      const centroidEdges = [];
+      for (let i = 0; i < centroids.length; i++) {
+        const a = centroids[i];
+        const nbrs = centroids
+          .map((b, j) => (j === i ? null : { j, d: Math.hypot(a.x - b.x, a.y - b.y) }))
+          .filter(Boolean).sort((p, q) => p.d - q.d).slice(0, 3);
+        for (const n of nbrs) {
+          const b = centroids[n.j];
+          centroidEdges.push({ x1: a.x, y1: a.y, x2: b.x, y2: b.y, d: n.d });
+        }
+      }
 
-      const grad2 = document.createElementNS(svg.namespaceURI,"linearGradient");
-      grad2.id = "lineGrad";
-      grad2.setAttribute("x1","0"); grad2.setAttribute("y1","0"); grad2.setAttribute("x2","1"); grad2.setAttribute("y2","0");
-      const l1 = document.createElementNS(svg.namespaceURI,"stop"); l1.setAttribute("offset","0%"); l1.setAttribute("stop-color","#84cc16");
-      const l2 = document.createElementNS(svg.namespaceURI,"stop"); l2.setAttribute("offset","100%"); l2.setAttribute("stop-color","#f472b6");
-      grad2.append(l1,l2);
-      defs.append(grad1,grad2); svg.append(defs);
+      // SVG
+      const svg = document.createElementNS(svgNS, "svg");
+      svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+      svg.setAttribute("preserveAspectRatio", "none");
+      svg.setAttribute("class", "w-full h-full");
+      svg.style.opacity = 0.42;
 
-      for (const e of edges) {
-        const line = document.createElementNS(svg.namespaceURI,"line");
+      const defs = document.createElementNS(svgNS, "defs");
+      const gTop = document.createElementNS(svgNS, "linearGradient");
+      gTop.id = "cubeTop"; gTop.setAttribute("x1","0"); gTop.setAttribute("y1","0"); gTop.setAttribute("x2","1"); gTop.setAttribute("y2","1");
+      gTop.innerHTML = `<stop offset="0%" stop-color="#a3e635"/><stop offset="100%" stop-color="#ec4899"/>`;
+
+      const gSideL = document.createElementNS(svgNS, "linearGradient");
+      gSideL.id = "cubeSideL"; gSideL.setAttribute("x1","1"); gSideL.setAttribute("y1","0"); gSideL.setAttribute("x2","0"); gSideL.setAttribute("y2","1");
+      gSideL.innerHTML = `<stop offset="0%" stop-color="#22c55e"/><stop offset="100%" stop-color="#f472b6"/>`;
+
+      const gSideR = document.createElementNS(svgNS, "linearGradient");
+      gSideR.id = "cubeSideR"; gSideR.setAttribute("x1","0"); gSideR.setAttribute("y1","0"); gSideR.setAttribute("x2","1"); gSideR.setAttribute("y2","1");
+      gSideR.innerHTML = `<stop offset="0%" stop-color="#84cc16"/><stop offset="100%" stop-color="#fb7185"/>`;
+
+      const gLine = document.createElementNS(svgNS, "linearGradient");
+      gLine.id = "lineGrad"; gLine.setAttribute("x1","0"); gLine.setAttribute("y1","0"); gLine.setAttribute("x2","1"); gLine.setAttribute("y2","0");
+      gLine.innerHTML = `<stop offset="0%" stop-color="#84cc16"/><stop offset="100%" stop-color="#f472b6"/>`;
+
+      const filter = document.createElementNS(svgNS, "filter");
+      filter.id = "softGlow";
+      filter.innerHTML = `
+        <feGaussianBlur in="SourceGraphic" stdDeviation="2.2" result="blur"/>
+        <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+      `;
+
+      defs.append(gTop, gSideL, gSideR, gLine, filter);
+      svg.append(defs);
+
+      // Inter-cluster links (faint)
+      for (const e of centroidEdges) {
+        const line = document.createElementNS(svgNS, "line");
         line.setAttribute("x1", e.x1); line.setAttribute("y1", e.y1);
         line.setAttribute("x2", e.x2); line.setAttribute("y2", e.y2);
-        line.setAttribute("stroke","url(#lineGrad)");
-        line.setAttribute("stroke-width","1");
-        line.setAttribute("stroke-opacity", String(Math.max(0.08, 0.45 - (e.d / 150) * 0.45)));
+        line.setAttribute("stroke", "url(#lineGrad)");
+        line.setAttribute("stroke-width", "1.2");
+        line.setAttribute("stroke-opacity", "0.12");
         svg.append(line);
       }
-      for (const n of nodes) {
-        const g = document.createElementNS(svg.namespaceURI,"g");
+
+      // Intra-cluster edges
+      for (const e of edges) {
+        const line = document.createElementNS(svgNS, "line");
+        line.setAttribute("x1", e.x1); line.setAttribute("y1", e.y1);
+        line.setAttribute("x2", e.x2); line.setAttribute("y2", e.y2);
+        line.setAttribute("stroke", "url(#lineGrad)");
+        line.setAttribute("stroke-width", "1");
+        const alpha = Math.max(0.08, 0.35 - (e.d / LINE_RADIUS) * 0.35);
+        line.setAttribute("stroke-opacity", String(alpha));
+        svg.append(line);
+      }
+
+      // Isometric cube (top + left + right faces)
+      function cubeGroup(n) {
+        const g = document.createElementNS(svgNS, "g");
         g.style.transformOrigin = `${n.x}px ${n.y}px`;
         g.style.animation = `driftNode ${n.dur}s ease-in-out ${n.delay}s infinite`;
         g.style.setProperty("--dx", `${n.dx}px`);
         g.style.setProperty("--dy", `${n.dy}px`);
-        const r1 = document.createElementNS(svg.namespaceURI,"rect");
-        r1.setAttribute("x", n.x - n.s/2); r1.setAttribute("y", n.y - n.s/2);
-        r1.setAttribute("width", n.s); r1.setAttribute("height", n.s); r1.setAttribute("rx","2");
-        r1.setAttribute("fill","url(#nodeGrad)"); r1.setAttribute("opacity","0.95");
-        const r2 = document.createElementNS(svg.namespaceURI,"rect");
-        r2.setAttribute("x", n.x - n.s/2 + 10); r2.setAttribute("y", n.y - n.s/2 + 10);
-        r2.setAttribute("width", n.s); r2.setAttribute("height", n.s); r2.setAttribute("rx","2");
-        r2.setAttribute("fill","#00ff8850"); r2.setAttribute("opacity","0.25");
-        g.append(r1,r2); svg.append(g);
+        g.setAttribute("filter", "url(#softGlow)");
+
+        const a = n.s;        // half width on x
+        const b = n.s * 0.55; // half height on y
+
+        const top = document.createElementNS(svgNS, "polygon");
+        top.setAttribute("points", [
+          `${n.x},${n.y - a}`,
+          `${n.x + a},${n.y - b}`,
+          `${n.x},${n.y}`,
+          `${n.x - a},${n.y - b}`,
+        ].join(" "));
+        top.setAttribute("fill", "url(#cubeTop)");
+        top.setAttribute("opacity", "0.95");
+
+        const right = document.createElementNS(svgNS, "polygon");
+        right.setAttribute("points", [
+          `${n.x + a},${n.y - b}`,
+          `${n.x + a},${n.y + b}`,
+          `${n.x},${n.y + a}`,
+          `${n.x},${n.y}`,
+        ].join(" "));
+        right.setAttribute("fill", "url(#cubeSideR)");
+        right.setAttribute("opacity", "0.80");
+
+        const left = document.createElementNS(svgNS, "polygon");
+        left.setAttribute("points", [
+          `${n.x - a},${n.y - b}`,
+          `${n.x},${n.y}`,
+          `${n.x},${n.y + a}`,
+          `${n.x - a},${n.y + b}`,
+        ].join(" "));
+        left.setAttribute("fill", "url(#cubeSideL)");
+        left.setAttribute("opacity", "0.85");
+
+        g.append(left, right, top);
+        return g;
       }
+
+      nodes.forEach(n => svg.append(cubeGroup(n)));
       bg.append(svg);
     }
 
     // ---------- Rendering ----------
     function render(entries) {
       const enriched = entries.map(e => ({...e, ms: parseTimeToMs(e.timeInput)})).sort((a,b)=>a.ms-b.ms);
-      // leaderboard
+
       const list = document.getElementById("lbList");
       list.innerHTML = "";
       enriched.forEach((e,i) => {
@@ -293,6 +441,7 @@
         li.querySelector("button").addEventListener("click", () => setFeatured(enriched, i));
         list.append(li);
       });
+
       setFeatured(enriched, 0);
     }
 
@@ -310,6 +459,7 @@
         metaWrap.classList.add("hidden");
         return;
       }
+      // Build embed
       let node = null;
       try {
         const u = new URL(f.link);
@@ -380,12 +530,13 @@
     });
 
     // ---------- Boot ----------
-    initNodeNetBG();
+    initFractalCubeBG();
     window.addEventListener("resize", () => {
-      clearTimeout(window.__dripRSZ); window.__dripRSZ = setTimeout(initNodeNetBG, 150);
+      clearTimeout(window.__dripRSZ);
+      window.__dripRSZ = setTimeout(initFractalCubeBG, 150);
     });
     render(loadEntries());
-    console.log("DrippyCubeChallenge boot OK");
+    console.log("DrippyCubeChallenge (fractal bg) boot OK");
   </script>
 </body>
 </html>
