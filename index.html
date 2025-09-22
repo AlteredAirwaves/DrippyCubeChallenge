@@ -5,10 +5,11 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Drippy Rubix Cube Challenge</title>
   <meta name="color-scheme" content="dark" />
+  <!-- Tailwind for styles (ok to omit; page still shows content without it) -->
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
     html, body { height: 100%; background: #0a0f14; }
-    body { margin: 0; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji"; color: #fff; }
+    body { margin: 0; color: #fff; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji"; }
     /* helpers */
     @keyframes floaty {0%{transform:translateY(0)}50%{transform:translateY(-6px)}100%{transform:translateY(0)}}
     @keyframes wobble {0%,100%{transform:rotate(0)}25%{transform:rotate(-3deg)}75%{transform:rotate(3deg)}}
@@ -16,17 +17,18 @@
     .animate-floaty{animation:floaty 4s ease-in-out infinite}
     .animate-wobble:hover{animation:wobble .6s ease-in-out}
     .animate-marquee{animation:marquee 16s linear infinite}
-    /* background drift */
     @keyframes driftNode { 0% { transform: translate3d(0,0,0) rotate(0deg) }
       50% { transform: translate3d(var(--dx), var(--dy), 0) rotate(5deg) }
       100% { transform: translate3d(0,0,0) rotate(0deg) } }
   </style>
 </head>
 <body>
-  <!-- background -->
-  <div id="bg" class="pointer-events-none absolute inset-0 overflow-hidden" aria-hidden="true"></div>
+  <!-- BACKGROUND (fixed behind everything) -->
+  <div id="bg" aria-hidden="true"
+       style="position:fixed; inset:0; z-index:0; pointer-events:none; overflow:hidden"></div>
 
-  <div class="relative min-h-screen" style="background: linear-gradient(180deg,#020409,#0a0f14 40%,#0b0e12)">
+  <!-- CONTENT (explicitly above background) -->
+  <div style="position:relative; z-index:1; min-height:100vh; background: linear-gradient(180deg,#020409,#0a0f14 40%,#0b0e12)">
     <header class="relative">
       <div class="mx-auto max-w-6xl px-4 pt-10 pb-6">
         <div class="flex items-center gap-3">
@@ -134,12 +136,12 @@
   <noscript>This app needs JavaScript enabled.</noscript>
 
   <script>
-    // ---------- Util ----------
+    // ---------- Utils ----------
     const pad = (n, len=2) => String(n).padStart(len, "0");
     function parseTimeToMs(str) {
       if (!str) return Number.POSITIVE_INFINITY;
       const s = String(str).trim();
-      if (/^\\d+(\\.\\d+)?$/.test(s)) return Math.round(parseFloat(s) * 1000);
+      if (/^\d+(\.\d+)?$/.test(s)) return Math.round(parseFloat(s) * 1000);
       const parts = s.split(":").map(Number);
       if (parts.some((p) => isNaN(p))) return Number.POSITIVE_INFINITY;
       if (parts.length === 2) {
@@ -159,7 +161,7 @@
       const msec = ms % 1000;
       const mm = Math.floor(totalSec / 60);
       const ss = totalSec % 60;
-      return \`\${pad(mm)}:\${pad(ss)}.\${pad(msec, 3)}\`;
+      return `${pad(mm)}:${pad(ss)}.${pad(msec, 3)}`;
     }
     function hostOf(url) {
       try { return new URL(url).hostname.replace("www.",""); } catch { return ""; }
@@ -183,10 +185,9 @@
     // ---------- Background (SVG nodes + lines) ----------
     function initNodeNetBG() {
       const bg = document.getElementById("bg");
-      bg.innerHTML = ""; // clear
+      bg.innerHTML = "";
       const w = window.innerWidth || 1280, h = window.innerHeight || 720;
 
-      // deterministic RNG for a stable layout per size
       let seed = (w ^ h ^ 1337) >>> 0;
       function rnd() {
         seed += 0x6D2B79F5;
@@ -220,7 +221,7 @@
       }
 
       const svg = document.createElementNS("http://www.w3.org/2000/svg","svg");
-      svg.setAttribute("viewBox", \`0 0 \${w} \${h}\`);
+      svg.setAttribute("viewBox", `0 0 ${w} ${h}`);
       svg.setAttribute("preserveAspectRatio","none");
       svg.setAttribute("class","w-full h-full");
       svg.style.opacity = 0.38;
@@ -239,9 +240,7 @@
       const l1 = document.createElementNS(svg.namespaceURI,"stop"); l1.setAttribute("offset","0%"); l1.setAttribute("stop-color","#84cc16");
       const l2 = document.createElementNS(svg.namespaceURI,"stop"); l2.setAttribute("offset","100%"); l2.setAttribute("stop-color","#f472b6");
       grad2.append(l1,l2);
-
-      defs.append(grad1,grad2);
-      svg.append(defs);
+      defs.append(grad1,grad2); svg.append(defs);
 
       for (const e of edges) {
         const line = document.createElementNS(svg.namespaceURI,"line");
@@ -254,11 +253,10 @@
       }
       for (const n of nodes) {
         const g = document.createElementNS(svg.namespaceURI,"g");
-        g.style.transformOrigin = \`\${n.x}px \${n.y}px\`;
-        g.style.animation = \`driftNode \${n.dur}s ease-in-out \${n.delay}s infinite\`;
-        g.style.setProperty("--dx", \`\${n.dx}px\`);
-        g.style.setProperty("--dy", \`\${n.dy}px\`);
-
+        g.style.transformOrigin = `${n.x}px ${n.y}px`;
+        g.style.animation = `driftNode ${n.dur}s ease-in-out ${n.delay}s infinite`;
+        g.style.setProperty("--dx", `${n.dx}px`);
+        g.style.setProperty("--dy", `${n.dy}px`);
         const r1 = document.createElementNS(svg.namespaceURI,"rect");
         r1.setAttribute("x", n.x - n.s/2); r1.setAttribute("y", n.y - n.s/2);
         r1.setAttribute("width", n.s); r1.setAttribute("height", n.s); r1.setAttribute("rx","2");
@@ -267,28 +265,24 @@
         r2.setAttribute("x", n.x - n.s/2 + 10); r2.setAttribute("y", n.y - n.s/2 + 10);
         r2.setAttribute("width", n.s); r2.setAttribute("height", n.s); r2.setAttribute("rx","2");
         r2.setAttribute("fill","#00ff8850"); r2.setAttribute("opacity","0.25");
-        g.append(r1,r2);
-        svg.append(g);
+        g.append(r1,r2); svg.append(g);
       }
       bg.append(svg);
     }
 
     // ---------- Rendering ----------
     function render(entries) {
-      // sort
-      const enriched = entries.map(e => ({...e, ms: parseTimeToMs(e.timeInput)}));
-      enriched.sort((a,b) => a.ms - b.ms);
-
+      const enriched = entries.map(e => ({...e, ms: parseTimeToMs(e.timeInput)})).sort((a,b)=>a.ms-b.ms);
       // leaderboard
       const list = document.getElementById("lbList");
       list.innerHTML = "";
       enriched.forEach((e,i) => {
         const li = document.createElement("li");
         li.className = "flex items-center justify-between py-3 rounded-xl px-2 transition hover:bg-white/5";
-        const badge = ["🥇","🥈","🥉"][i] || "✨";
+        const medal = ["🥇","🥈","🥉"][i] || "✨";
         li.innerHTML = `
           <div class="flex items-center gap-3 min-w-0">
-            <span class="inline-flex items-center justify-center w-7 h-7 shrink-0 rounded-md text-sm font-bold bg-gradient-to-b from-lime-400 to-pink-500 text-black shadow-[0_6px_20px_rgba(132,204,22,0.35)]">${badge}</span>
+            <span class="inline-flex items-center justify-center w-7 h-7 shrink-0 rounded-md text-sm font-bold bg-gradient-to-b from-lime-400 to-pink-500 text-black shadow-[0_6px_20px_rgba(132,204,22,0.35)]">${medal}</span>
             <button class="text-left truncate hover:underline">
               <span class="font-medium">${e.name}</span>
               <span class="ml-2 text-xs text-white/50 hidden sm:inline">${hostOf(e.link)}</span>
@@ -299,8 +293,6 @@
         li.querySelector("button").addEventListener("click", () => setFeatured(enriched, i));
         list.append(li);
       });
-
-      // default featured
       setFeatured(enriched, 0);
     }
 
@@ -318,7 +310,6 @@
         metaWrap.classList.add("hidden");
         return;
       }
-      // build embed
       let node = null;
       try {
         const u = new URL(f.link);
@@ -362,8 +353,6 @@
         node = a;
       }
       embed.append(node);
-
-      // meta
       name.textContent = f.name;
       link.textContent = f.link;
       time.textContent = formatMs(f.ms);
@@ -383,24 +372,20 @@
       const list = loadEntries();
       list.push({ name: n, timeInput: t, link: l });
       saveEntries(list);
-      // re-render
       render(list);
-      // clear
       document.getElementById("name").value = "";
       document.getElementById("time").value = "";
       document.getElementById("link").value = "";
-      // jump to top leaderboard
       window.scrollTo({ top: 0, behavior: "smooth" });
     });
 
     // ---------- Boot ----------
     initNodeNetBG();
     window.addEventListener("resize", () => {
-      // debounce-ish: reinit after resize settles
-      clearTimeout(window.__dripRSZ);
-      window.__dripRSZ = setTimeout(initNodeNetBG, 150);
+      clearTimeout(window.__dripRSZ); window.__dripRSZ = setTimeout(initNodeNetBG, 150);
     });
     render(loadEntries());
+    console.log("DrippyCubeChallenge boot OK");
   </script>
 </body>
 </html>
