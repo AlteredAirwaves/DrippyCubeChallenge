@@ -1,0 +1,456 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Drippy Rubix Cube Leaderboard</title>
+  <!-- Tailwind Play CDN (great for quick demos) -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <meta name="color-scheme" content="dark">
+  <style>
+    html,body,#root { height: 100%; background: #0a0f14; }
+    body { margin: 0; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <!-- React 18 + ReactDOM (UMD) -->
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <!-- Babel standalone compiles the JSX in the browser (fine for demos) -->
+  <script src="https://unpkg.com/babel-standalone@6/babel.min.js"></script>
+
+  <script type="text/babel">
+    const { useEffect, useMemo, useState } = React;
+
+    function DrippyRubixLeaderboard() {
+      // --- Helpers ---
+      function classNames(...cls) { return cls.filter(Boolean).join(" "); }
+      const pad = (n, len = 2) => String(n).padStart(len, "0");
+
+      function parseTimeToMs(str) {
+        if (!str) return Number.POSITIVE_INFINITY;
+        const s = String(str).trim();
+        if (/^\d+(\.\d+)?$/.test(s)) return Math.round(parseFloat(s) * 1000);
+        const parts = s.split(":").map(Number);
+        if (parts.some((p) => isNaN(p))) return Number.POSITIVE_INFINITY;
+        let ms = 0;
+        if (parts.length === 2) {
+          const [mm, secRaw] = parts;
+          const [ss, frac] = String(secRaw).split(".");
+          ms = (mm * 60 + Number(ss)) * 1000 + (frac ? Math.round(Number("0." + frac) * 1000) : 0);
+        } else if (parts.length === 3) {
+          const [hh, mm, ss] = parts;
+          ms = ((hh * 3600) + (mm * 60) + ss) * 1000;
+        } else return Number.POSITIVE_INFINITY;
+        return ms;
+      }
+
+      function formatMs(ms) {
+        if (!isFinite(ms) || ms < 0) return "--:--";
+        const totalSec = Math.floor(ms / 1000);
+        const msec = ms % 1000;
+        const mm = Math.floor(totalSec / 60);
+        const ss = totalSec % 60;
+        return `${pad(mm)}:${pad(ss)}.${pad(msec, 3)}`;
+      }
+
+      function renderVideoEmbed(url) {
+        if (!url) return null;
+        try {
+          const u = new URL(url);
+          const host = u.hostname.replace("www.", "");
+          if (host.includes("youtube.com") || host.includes("youtu.be")) {
+            let id = u.searchParams.get("v");
+            if (!id && host.includes("youtu.be")) id = u.pathname.slice(1);
+            if (id) return (
+              <iframe className="w-full h-full rounded-2xl"
+                src={`https://www.youtube.com/embed/${id}`} title="Submission video"
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                allowFullScreen />
+            );
+          }
+          if (host.includes("vimeo.com")) {
+            const id = u.pathname.split("/").filter(Boolean)[0];
+            if (id) return (
+              <iframe className="w-full h-full rounded-2xl"
+                src={`https://player.vimeo.com/video/${id}`} title="Submission video"
+                allow="autoplay; fullscreen; picture-in-picture" allowFullScreen />
+            );
+          }
+          if (u.pathname.endsWith(".mp4")) {
+            return <video className="w-full h-full rounded-2xl" src={url} controls playsInline />;
+          }
+          return (
+            <a href={url} target="_blank" rel="noreferrer"
+               className="group flex items-center justify-center w-full h-full rounded-2xl border border-white/10 bg-white/5 hover:bg-white/10 transition"
+               title="Open submission link">
+              <div className="text-center px-6 py-4">
+                <p className="text-sm text-white/80">Open the submission on</p>
+                <p className="text-lg font-semibold text-white mt-1 break-all group-hover:underline">{url}</p>
+                <p className="mt-2 text-xs text-white/60">(Instagram, TikTok, X links open in a new tab)</p>
+              </div>
+            </a>
+          );
+        } catch { return null; }
+      }
+
+      const starterEntries = [
+        { name: "Nova",      timeInput: "00:43.127", link: "https://youtu.be/dQw4w9WgXcQ" },
+        { name: "Ry L.",     timeInput: "41.8",      link: "https://www.instagram.com/" },
+        { name: "PixelPete", timeInput: "01:02.45",  link: "https://www.tiktok.com/" },
+      ];
+
+      // --- Trippy matrix background (random squares + connecting lines) ---
+      function NodeNetBG() {
+        const [dims, setDims] = useState({ w: 0, h: 0 });
+
+        useEffect(() => {
+          function update() {
+            if (typeof window !== "undefined") setDims({ w: window.innerWidth, h: window.innerHeight });
+          }
+          update();
+          window.addEventListener("resize", update);
+          return () => window.removeEventListener("resize", update);
+        }, []);
+
+        function rng(seed) {
+          return function mulberry32() {
+            let t = (seed += 0x6D2B79F5);
+            t = Math.imul(t ^ (t >>> 15), t | 1);
+            t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+            return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+          };
+        }
+
+        const { nodes, edges } = React.useMemo(() => {
+          const w = Math.max(640, dims.w || 1280);
+          const h = Math.max(480, dims.h || 720);
+          const r = rng(w ^ h ^ 1337);
+          const rand = () => r();
+          const count = Math.max(70, Math.min(140, Math.floor((w * h) / 28000)));
+          const ns = Array.from({ length: count }, (_, i) => {
+            const s = 3 + Math.floor(rand() * 14);
+            const x = Math.floor(rand() * w);
+            const y = Math.floor(rand() * h);
+            const delay = rand() * 1.8;
+            const dur = 6 + rand() * 10;
+            const dir = rand() * 360;
+            const dx = Math.cos((dir * Math.PI) / 180) * (6 + rand() * 16);
+            const dy = Math.sin((dir * Math.PI) / 180) * (6 + rand() * 16);
+            return { i, x, y, s, delay, dur, dx, dy };
+          });
+
+          const threshold = 150;
+          const es = [];
+          for (let i = 0; i < ns.length; i++) {
+            for (let j = i + 1; j < ns.length; j++) {
+              const a = ns[i], b = ns[j];
+              const dx = a.x - b.x, dy = a.y - b.y;
+              const d = Math.hypot(dx, dy);
+              if (d <= threshold) es.push({ x1: a.x, y1: a.y, x2: b.x, y2: b.y, d });
+            }
+          }
+          return { nodes: ns, edges: es };
+        }, [dims.w, dims.h]);
+
+        return (
+          <div aria-hidden className="pointer-events-none absolute inset-0 overflow-hidden">
+            <style>{`
+              @keyframes driftNode { 0% { transform: translate3d(0,0,0) rotate(0deg) } 50% { transform: translate3d(var(--dx), var(--dy), 0) rotate(5deg) } 100% { transform: translate3d(0,0,0) rotate(0deg) } }
+            `}</style>
+            <svg className="w-full h-full"
+                 viewBox={`0 0 ${Math.max(640, dims.w || 1280)} ${Math.max(480, dims.h || 720)}`}
+                 preserveAspectRatio="none"
+                 style={{ opacity: 0.38 }}>
+              <defs>
+                <linearGradient id="nodeGrad" x1="0" y1="0" x2="1" y2="1">
+                  <stop offset="0%" stop-color="#a3e635" />
+                  <stop offset="100%" stop-color="#ec4899" />
+                </linearGradient>
+                <linearGradient id="lineGrad" x1="0" y1="0" x2="1" y2="0">
+                  <stop offset="0%" stop-color="#84cc16" />
+                  <stop offset="100%" stop-color="#f472b6" />
+                </linearGradient>
+              </defs>
+
+              {edges.map((e, idx) => {
+                const alpha = Math.max(0.08, 0.45 - (e.d / 150) * 0.45);
+                return (
+                  <line key={`e-${idx}`} x1={e.x1} y1={e.y1} x2={e.x2} y2={e.y2}
+                        stroke="url(#lineGrad)" strokeWidth="1" strokeOpacity={alpha} />
+                );
+              })}
+
+              {nodes.map((n) => (
+                <g key={n.i}
+                  style={{
+                    transformOrigin: `${n.x}px ${n.y}px`,
+                    animation: `driftNode ${n.dur}s ease-in-out ${n.delay}s infinite`,
+                    "--dx": `${n.dx}px`,
+                    "--dy": `${n.dy}px`
+                  }}>
+                  <rect x={n.x - n.s / 2} y={n.y - n.s / 2} width={n.s} height={n.s} rx="2"
+                        fill="url(#nodeGrad)" opacity="0.95" />
+                  <rect x={n.x - n.s / 2 + 10} y={n.y - n.s / 2 + 10} width={n.s} height={n.s} rx="2"
+                        fill="#00ff8850" opacity="0.25" />
+                </g>
+              ))}
+            </svg>
+          </div>
+        );
+      }
+
+      function RankBadge({ i }) {
+        const labels = ["🥇","🥈","🥉"]; const txt = labels[i] || "✨";
+        return (
+          <span className={classNames(
+            "inline-flex items-center justify-center w-7 h-7 shrink-0 rounded-md text-sm font-bold",
+            i === 0 ? "bg-lime-400 text-black"
+              : i === 1 ? "bg-slate-200 text-black"
+              : i === 2 ? "bg-pink-400 text-black"
+              : "bg-gradient-to-b from-lime-400 to-pink-500 text-black",
+            "shadow-[0_6px_20px_rgba(132,204,22,0.35)]"
+          )}>{txt}</span>
+        );
+      }
+
+      function Sticker({ children }) {
+        return (
+          <span className="select-none rounded-xl bg-white/10 border border-white/10 px-3 py-1 text-xs font-semibold backdrop-blur hover:rotate-[-1deg] hover:scale-[1.03] transition">
+            {children}
+          </span>
+        );
+      }
+
+      function Marquee() {
+        return (
+          <div className="relative overflow-hidden rounded-2xl border border-white/10 bg-white/5">
+            <div className="animate-marquee whitespace-nowrap py-2 text-sm">
+              <span className="mx-6">💚 Lime x 💖 Pink</span>
+              <span className="mx-6">🧩 Solve Fast</span>
+              <span className="mx-6">🧠 Smart Sips</span>
+              <span className="mx-6">🎥 Link Your Clip</span>
+              <span className="mx-6">🚀 SF Startup Vibes</span>
+            </div>
+          </div>
+        );
+      }
+
+      // --- Tiny console tests ---
+      function runDevTests() {
+        try {
+          const tests = [
+            { input: "45.23", expect: 45230 },
+            { input: "01:02.45", expect: 62450 },
+            { input: "1:12", expect: 72000 },
+            { input: "0:59:12", expect: (59 * 60 + 12) * 1000 },
+            { input: "", expect: Infinity },
+            { input: "abc", expect: Infinity },
+            { input: "02:03.007", expect: 123007 },
+            { input: "1:00:00", expect: 3600000 },
+            { input: "00:00.000", expect: 0 },
+            { input: "5", expect: 5000 },
+          ];
+          tests.forEach(({ input, expect }) => {
+            const got = parseTimeToMs(input);
+            console.assert((Number.isFinite(expect) && Math.abs(got - expect) < 2) || (!Number.isFinite(expect) && !Number.isFinite(got)),
+              `parseTimeToMs("${input}") => ${got}, expected ${expect}`);
+          });
+          const fmts = [
+            { ms: 62450, expect: "01:02.450" },
+            { ms: 45230, expect: "00:45.230" },
+            { ms: -1, expect: "--:--" },
+            { ms: 0, expect: "00:00.000" },
+            { ms: 123007, expect: "02:03.007" },
+          ];
+          fmts.forEach(({ ms, expect }) => {
+            const got = formatMs(ms);
+            console.assert(got === expect, `formatMs(${ms}) => ${got}, expected ${expect}`);
+          });
+        } catch {}
+      }
+
+      // --- State ---
+      const [entries, setEntries] = useState(() => {
+        if (typeof window !== "undefined") {
+          try { const raw = localStorage.getItem("drippy_rubix_entries"); return raw ? JSON.parse(raw) : starterEntries; } catch {}
+        }
+        return starterEntries;
+      });
+      const [featuredIndex, setFeaturedIndex] = useState(0);
+      const [name, setName] = useState("");
+      const [timeInput, setTimeInput] = useState("");
+      const [link, setLink] = useState("");
+      const [error, setError] = useState("");
+      const [success, setSuccess] = useState("");
+      const [celebrate, setCelebrate] = useState(false);
+      const [confetti] = useState(() => Array.from({ length: 24 }, (_, i) => ({
+        id: i, left: Math.random() * 100, delay: Math.random() * 1200
+      })));
+
+      useEffect(() => { try { localStorage.setItem("drippy_rubix_entries", JSON.stringify(entries)); } catch {} }, [entries]);
+      useEffect(() => { runDevTests(); }, []);
+      useEffect(() => { if (entries.length) setFeaturedIndex(0); }, []);
+
+      const enriched = useMemo(() => entries.map(e => ({ ...e, ms: parseTimeToMs(e.timeInput) })), [entries]);
+      const sorted = useMemo(() => enriched.slice().sort((a, b) => a.ms - b.ms), [enriched]);
+
+      function onSubmit(e) {
+        e.preventDefault();
+        setError(""); setSuccess("");
+        if (!name.trim()) return setError("Please add your name.");
+        const ms = parseTimeToMs(timeInput);
+        if (!isFinite(ms)) return setError("Time must be like 01:02.450 or 45.3 seconds.");
+        if (!link.trim()) return setError("Please add a public video link.");
+        setEntries([...entries, { name: name.trim(), timeInput: timeInput.trim(), link: link.trim() }]);
+        setSuccess("Submitted! You're on the board. (Local demo storage.)");
+        setName(""); setTimeInput(""); setLink("");
+        setCelebrate(true); setTimeout(() => setCelebrate(false), 2500);
+      }
+
+      const featured = sorted[featuredIndex] || null;
+
+      return (
+        <div className="min-h-screen text-white relative overflow-hidden" style={{ background: "linear-gradient(180deg,#020409,#0a0f14 40%,#0b0e12)" }}>
+          <style>{`
+            @keyframes floaty {0%{transform:translateY(0)}50%{transform:translateY(-6px)}100%{transform:translateY(0)}}
+            @keyframes wobble {0%,100%{transform:rotate(0)}25%{transform:rotate(-3deg)}75%{transform:rotate(3deg)}}
+            @keyframes marquee {0%{transform:translateX(0)}100%{transform:translateX(-50%)}}
+            .animate-floaty{animation:floaty 4s ease-in-out infinite}
+            .animate-wobble:hover{animation:wobble .6s ease-in-out}
+            .animate-marquee{animation:marquee 16s linear infinite}
+          `}</style>
+
+          <NodeNetBG />
+
+          <header className="relative">
+            <div className="mx-auto max-w-6xl px-4 pt-10 pb-6">
+              <div className="flex items-center gap-3">
+                <img src="https://cdn.shopify.com/s/files/1/0630/6889/7494/files/eyes-3inch-red.png?v=1742844664"
+                     alt="Drippy Logo" className="w-12 h-12 object-contain animate-floaty animate-wobble" />
+                <h1 className="text-2xl md:text-3xl font-extrabold tracking-tight bg-gradient-to-r from-lime-300 via-white to-pink-300 bg-clip-text text-transparent">
+                  Drippy Rubix Cube Leaderboard
+                </h1>
+              </div>
+              <div className="mt-4 flex flex-wrap items-center gap-2">
+                <Sticker>🚀 SF startup polish</Sticker>
+                <Sticker>💚 Lime × 💖 Pink</Sticker>
+                <Sticker>🧩 Speedrun vibes</Sticker>
+              </div>
+              <p className="mt-3 max-w-2xl text-white/75">
+                Sip, solve, send it. Post your best time and link your video from Instagram, TikTok, or X (Twitter).
+                Fastest solves float to the top—like fizz.
+              </p>
+            </div>
+            <div className="mx-auto max-w-6xl px-4 pb-6"><Marquee /></div>
+          </header>
+
+          <main className="mx-auto max-w-6xl px-4 pb-24">
+            <section className="grid grid-cols-1 lg:grid-cols-5 gap-6 items-stretch">
+              <div className="lg:col-span-3 p-4 md:p-6 rounded-3xl bg-white/[0.04] backdrop-blur border border-white/10 shadow-[0_10px_40px_rgba(34,197,94,0.15)]">
+                <div className="flex items-center justify-between">
+                  <h2 className="text-xl font-semibold">Top Times</h2>
+                  <span className="text-xs text-white/50">auto-sorted • lower is better</span>
+                </div>
+                <ol className="mt-4 divide-y divide-white/10">
+                  {sorted.map((e, i) => (
+                    <li key={`${e.name}-${i}`} className="flex items-center justify-between py-3 rounded-xl px-2 transition hover:bg-white/5">
+                      <div className="flex items-center gap-3 min-w-0">
+                        <RankBadge i={i} />
+                        <button onClick={() => setFeaturedIndex(i)} className="text-left truncate hover:underline">
+                          <span className="font-medium">{e.name}</span>
+                          <span className="ml-2 text-xs text-white/50 hidden sm:inline">
+                            {new URL(e.link || "https://example.com").hostname.replace("www.","")}
+                          </span>
+                        </button>
+                      </div>
+                      <span className="tabular-nums font-mono text-lg">{formatMs(e.ms)}</span>
+                    </li>
+                  ))}
+                </ol>
+              </div>
+
+              <div className="lg:col-span-2 p-4 md:p-6 rounded-3xl bg-white/[0.04] backdrop-blur border border-white/10 relative overflow-hidden">
+                <div className="absolute -top-10 -right-10 w-40 h-40 rounded-full bg-gradient-to-tr from-lime-400/30 to-pink-500/30 blur-2xl" />
+                <h2 className="text-xl font-semibold">Featured Clip</h2>
+                <div className="mt-4 aspect-video w-full rounded-2xl overflow-hidden border border-white/10 bg-black/40">
+                  {featured ? renderVideoEmbed(featured.link) : <div className="w-full h-full flex items-center justify-center text-white/60">No submission selected</div>}
+                </div>
+                {featured && (
+                  <div className="mt-3 flex items-center justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium truncate">{featured.name}</p>
+                      <p className="text-xs text-white/60 truncate">{featured.link}</p>
+                    </div>
+                    <span className="text-sm font-mono tabular-nums bg-white/10 px-2 py-1 rounded-md">{formatMs(featured.ms)}</span>
+                  </div>
+                )}
+              </div>
+            </section>
+
+            <section id="submit" className="mt-10 p-4 md:p-6 rounded-3xl bg-white/[0.04] backdrop-blur border border-white/10 relative">
+              {/* simple confetti burst */}
+              {/* (kept super light; emojis animate via Tailwind) */}
+              {false && <div />}{/* placeholder if you want to turn off later */}
+              <div className="flex items-center justify-between">
+                <h3 className="text-lg md:text-xl font-semibold">Submit Your Time</h3>
+                <span className="text-xs text-white/60">Demo stores locally</span>
+              </div>
+              <form onSubmit={onSubmit} className="mt-5 grid grid-cols-1 md:grid-cols-12 gap-4">
+                <div className="md:col-span-3">
+                  <label className="block text-sm text-white/70 mb-1">Name</label>
+                  <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Your name"
+                         className="w-full rounded-xl bg-white/10 border border-white/10 px-3 py-2 outline-none focus:ring-2 focus:ring-lime-400/60" />
+                </div>
+                <div className="md:col-span-3">
+                  <label className="block text-sm text-white/70 mb-1">Time</label>
+                  <input value={timeInput} onChange={(e) => setTimeInput(e.target.value)} placeholder="mm:ss.fff or seconds"
+                         className="w-full rounded-xl bg-white/10 border border-white/10 px-3 py-2 outline-none focus:ring-2 focus:ring-lime-400/60 font-mono" />
+                </div>
+                <div className="md:col-span-6">
+                  <label className="block text-sm text-white/70 mb-1">Video Link (Instagram, TikTok, X, YouTube, Vimeo, or .mp4)</label>
+                  <input value={link} onChange={(e) => setLink(e.target.value)} placeholder="https://instagram.com/..."
+                         className="w-full rounded-xl bg-white/10 border border-white/10 px-3 py-2 outline-none focus:ring-2 focus:ring-lime-400/60" />
+                </div>
+                <div className="md:col-span-12 flex flex-wrap items-center gap-3">
+                  <button type="submit"
+                          className="rounded-xl px-5 py-2.5 font-semibold bg-gradient-to-r from-lime-400 via-emerald-400 to-pink-500 shadow-[0_10px_30px_rgba(132,204,22,0.35)] hover:scale-[1.02] hover:shadow-[0_12px_36px_rgba(236,72,153,0.45)] transition">
+                    Submit
+                  </button>
+                  <span className="text-xs text-white/60">By posting, you agree we can display your name + link.</span>
+                </div>
+              </form>
+              <p className="mt-4 text-xs text-white/60">
+                Pro tip: Paste raw seconds like <span className="font-mono">41.82</span> or formatted like <span className="font-mono">01:02.450</span>.
+                We auto-embed YouTube/Vimeo; socials open in a new tab.
+              </p>
+            </section>
+
+            <footer className="relative mt-12 py-10">
+              <div className="mx-auto max-w-6xl px-4">
+                <div className="rounded-3xl border border-white/10 bg-white/[0.04] backdrop-blur p-6 flex flex-col md:flex-row items-center justify-between gap-4 overflow-hidden">
+                  <div>
+                    <h4 className="text-lg font-semibold">Wire it up like a real SAAS?</h4>
+                    <p className="text-white/70 text-sm mt-1 max-w-xl">
+                      I can push this to a Google Sheet or your backend for real submissions, add admin moderation, and build an API for embeds.
+                    </p>
+                  </div>
+                  <a href="#submit" className="rounded-xl px-5 py-2.5 font-semibold bg-gradient-to-r from-lime-400 via-emerald-400 to-pink-500 shadow-[0_10px_30px_rgba(132,204,22,0.35)] hover:opacity-95 transition">
+                    Start Now
+                  </a>
+                </div>
+              </div>
+            </footer>
+          </main>
+        </div>
+      );
+    }
+
+    // Mount
+    const root = ReactDOM.createRoot(document.getElementById("root"));
+    root.render(<DrippyRubixLeaderboard />);
+  </script>
+</body>
+</html>
