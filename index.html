@@ -27,7 +27,7 @@
   </style>
 </head>
 <body>
-  <!-- LAYER 0: fractal cubes + lines (visible background) -->
+  <!-- LAYER 0: fractal squares + lines (visible background) -->
   <div id="bg" aria-hidden="true"
        style="position:fixed; inset:0; z-index:0; pointer-events:none; overflow:hidden"></div>
 
@@ -191,9 +191,7 @@
       try { const raw = localStorage.getItem(STORAGE_KEY); if (raw) return JSON.parse(raw); } catch {}
       return seedEntries;
     }
-    function saveEntries(list) {
-      try { localStorage.setItem(STORAGE_KEY, JSON.stringify(list)); } catch {}
-    }
+    function saveEntries(list) { try { localStorage.setItem(STORAGE_KEY, JSON.stringify(list)); } catch {} }
 
     function render(entries) {
       const enriched = entries.map(e => ({...e, ms: parseTimeToMs(e.timeInput)})).sort((a,b)=>a.ms-b.ms);
@@ -301,7 +299,7 @@
       window.scrollTo({ top: 0, behavior: "smooth" });
     });
 
-    /* ===================== Fractal Background ===================== */
+    /* ===================== Fractal Background (Transparent SQUARE outlines) ===================== */
     function initFractalCubeBG() {
       const bg = document.getElementById("bg");
       if (!bg) return;
@@ -370,14 +368,14 @@
             const nx = jx * SCALE, ny = jy * SCALE;
             const d  = fbm(nx, ny, seed);
             if (d > threshold) {
-              const sz = 3 + Math.floor((d - threshold) * 48);
+              const side = 6 + Math.floor((d - threshold) * 54); // square side length (6..~30)
               const { gx, gy } = grad(nx, ny, seed);
               const mag = 6 + (d - threshold) * 28;
               const dx = gx * mag, dy = gy * mag;
               const delay = Math.random() * 1.6;
               const dur   = 7 + Math.random() * 10;
               const cid = Math.min(CLUSTS - 1, Math.floor(d * CLUSTS));
-              nodes.push({ x: jx, y: jy, s: sz, cid, dx, dy, delay, dur, d });
+              nodes.push({ x: jx, y: jy, side, cid, dx, dy, delay, dur, d });
             }
           }
         }
@@ -398,7 +396,7 @@
       while (nodes.length < TARGET_MIN) {
         nodes.push({
           x: Math.random() * W, y: Math.random() * H,
-          s: 5 + Math.random() * 16, cid: Math.floor(Math.random() * CLUSTS),
+          side: 10 + Math.random() * 20, cid: Math.floor(Math.random() * CLUSTS),
           dx: (Math.random() - 0.5) * 20, dy: (Math.random() - 0.5) * 20,
           delay: Math.random() * 1.6, dur: 7 + Math.random() * 10, d: 1
         });
@@ -447,30 +445,26 @@
       svg.style.opacity = 0.46;
 
       const defs = document.createElementNS(svgNS, "defs");
-      const gTop = document.createElementNS(svgNS, "linearGradient");
-      gTop.id = "cubeTop"; gTop.setAttribute("x1","0"); gTop.setAttribute("y1","0"); gTop.setAttribute("x2","1"); gTop.setAttribute("y2","1");
-      gTop.innerHTML = `<stop offset="0%" stop-color="#a3e635"/><stop offset="100%" stop-color="#ec4899"/>`;
 
-      const gSideL = document.createElementNS(svgNS, "linearGradient");
-      gSideL.id = "cubeSideL"; gSideL.setAttribute("x1","1"); gSideL.setAttribute("y1","0"); gSideL.setAttribute("x2","0"); gSideL.setAttribute("y2","1");
-      gSideL.innerHTML = `<stop offset="0%" stop-color="#22c55e"/><stop offset="100%" stop-color="#f472b6"/>`;
-
-      const gSideR = document.createElementNS(svgNS, "linearGradient");
-      gSideR.id = "cubeSideR"; gSideR.setAttribute("x1","0"); gSideR.setAttribute("y1","0"); gSideR.setAttribute("x2","1"); gSideR.setAttribute("y2","1");
-      gSideR.innerHTML = `<stop offset="0%" stop-color="#84cc16"/><stop offset="100%" stop-color="#fb7185"/>`;
-
+      // Gradient for lines
       const gLine = document.createElementNS(svgNS, "linearGradient");
       gLine.id = "lineGrad"; gLine.setAttribute("x1","0"); gLine.setAttribute("y1","0"); gLine.setAttribute("x2","1"); gLine.setAttribute("y2","0");
       gLine.innerHTML = `<stop offset="0%" stop-color="#84cc16"/><stop offset="100%" stop-color="#f472b6"/>`;
 
+      // Gradient for square strokes
+      const gSq = document.createElementNS(svgNS, "linearGradient");
+      gSq.id = "sqStroke"; gSq.setAttribute("x1","0"); gSq.setAttribute("y1","0"); gSq.setAttribute("x2","1"); gSq.setAttribute("y2","1");
+      gSq.innerHTML = `<stop offset="0%" stop-color="#a3e635"/><stop offset="100%" stop-color="#ec4899"/>`;
+
+      // A soft glow that only affects the stroke (keeps inside transparent)
       const filter = document.createElementNS(svgNS, "filter");
       filter.id = "softGlow";
       filter.innerHTML = `
-        <feGaussianBlur in="SourceGraphic" stdDeviation="2.2" result="blur"/>
+        <feGaussianBlur in="SourceGraphic" stdDeviation="1.6" result="blur"/>
         <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
       `;
 
-      defs.append(gTop, gSideL, gSideR, gLine, filter);
+      defs.append(gLine, gSq, filter);
       svg.append(defs);
 
       // inter-cluster links (faint)
@@ -496,50 +490,51 @@
         svg.append(line);
       }
 
-      function cubeGroup(n) {
+      // Transparent SQUARE outline (no fill)
+      function squareGroup(n) {
         const g = document.createElementNS(svgNS, "g");
         g.style.transformOrigin = `${n.x}px ${n.y}px`;
         g.style.animation = `driftNode ${n.dur}s ease-in-out ${n.delay}s infinite`;
         g.style.setProperty("--dx", `${n.dx}px`);
         g.style.setProperty("--dy", `${n.dy}px`);
         g.setAttribute("filter", "url(#softGlow)");
-        const a = n.s, b = n.s * 0.55;
 
-        const top = document.createElementNS(svgNS, "polygon");
-        top.setAttribute("points", [
-          `${n.x},${n.y - a}`,
-          `${n.x + a},${n.y - b}`,
-          `${n.x},${n.y}`,
-          `${n.x - a},${n.y - b}`,
-        ].join(" "));
-        top.setAttribute("fill", "url(#cubeTop)");
-        top.setAttribute("opacity", "0.95");
+        const s = n.side;
+        const r = document.createElementNS(svgNS, "rect");
+        r.setAttribute("x", n.x - s / 2);
+        r.setAttribute("y", n.y - s / 2);
+        r.setAttribute("width", s);
+        r.setAttribute("height", s);
+        r.setAttribute("rx", 2);
+        r.setAttribute("fill", "none");                       // <-- transparent interior
+        r.setAttribute("stroke", "url(#sqStroke)");
+        // thinner stroke for small squares, thicker for large
+        const sw = 0.7 + (s / 36) * 0.9;
+        r.setAttribute("stroke-width", sw.toFixed(2));
+        r.setAttribute("stroke-opacity", "0.85");
+        r.setAttribute("shape-rendering", "geometricPrecision");
 
-        const right = document.createElementNS(svgNS, "polygon");
-        right.setAttribute("points", [
-          `${n.x + a},${n.y - b}`,
-          `${n.x + a},${n.y + b}`,
-          `${n.x},${n.y + a}`,
-          `${n.x},${n.y}`,
-        ].join(" "));
-        right.setAttribute("fill", "url(#cubeSideR)");
-        right.setAttribute("opacity", "0.80");
+        // optional inner outline for a subtle tech vibe
+        if (s > 14) {
+          const r2 = document.createElementNS(svgNS, "rect");
+          const inset = Math.min(3, s * 0.18);
+          r2.setAttribute("x", n.x - s / 2 + inset);
+          r2.setAttribute("y", n.y - s / 2 + inset);
+          r2.setAttribute("width", s - inset * 2);
+          r2.setAttribute("height", s - inset * 2);
+          r2.setAttribute("rx", 2);
+          r2.setAttribute("fill", "none");
+          r2.setAttribute("stroke", "url(#lineGrad)");
+          r2.setAttribute("stroke-width", Math.max(0.6, sw * 0.6).toFixed(2));
+          r2.setAttribute("stroke-opacity", "0.35");
+          g.append(r2);
+        }
 
-        const left = document.createElementNS(svgNS, "polygon");
-        left.setAttribute("points", [
-          `${n.x - a},${n.y - b}`,
-          `${n.x},${n.y}`,
-          `${n.x},${n.y + a}`,
-          `${n.x - a},${n.y + b}`,
-        ].join(" "));
-        left.setAttribute("fill", "url(#cubeSideL)");
-        left.setAttribute("opacity", "0.85");
-
-        g.append(left, right, top);
+        g.append(r);
         return g;
       }
 
-      nodes.forEach(n => svg.append(cubeGroup(n)));
+      nodes.forEach(n => svg.append(squareGroup(n)));
       bg.append(svg);
     }
 
@@ -550,7 +545,7 @@
       window.__dripRSZ = setTimeout(initFractalCubeBG, 150);
     });
     render(loadEntries());
-    console.log("DrippyCubeChallenge fractal background: OK");
+    console.log("DrippyCubeChallenge fractal background (transparent squares): OK");
   </script>
 </body>
 </html>
